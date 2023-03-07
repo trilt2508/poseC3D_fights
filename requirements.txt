@@ -1,0 +1,5 @@
+torch
+torchsummary
+numpy
+torchvision
+scikit-learn

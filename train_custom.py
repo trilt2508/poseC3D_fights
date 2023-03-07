@@ -21,6 +21,8 @@ import torch.optim as optim
 from torchvision import datasets, transforms
 import numpy as np
 
+batch_size = 16
+display_step = 20
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class MyDataset(Dataset):
@@ -37,58 +39,66 @@ class MyDataset(Dataset):
         return x, y
 
 
+def track_to_tensor(track_path):
+    with open(track_path, 'rb') as f:
+        track = pickle.load(f)
+
+    return track
+
+
+def batch_to_tensor(batch):
+    tensor_list = []
+    for track_path in batch:
+        track_tensor = track_to_tensor(track_path)
+        tensor_list.append(track_tensor)
+    batch_tensor = torch.stack(tensor_list)
+    return batch_tensor
+
 transform = transforms.Compose([
     transforms.RandomHorizontalFlip(),
     transforms.ToTensor(),
 ])
 
 
-dataset_path = 'data/fighting_dataset.pkl'
-label_path = 'data/label.pkl'
-with open(dataset_path, 'rb') as f:
+with open('path_dataset.pkl', 'rb') as f:
     data = pickle.load(f)
-with open(label_path, 'rb') as f:
-    label_s = pickle.load(f)
+    f.close()
+
+
 
 
 # Chia dữ liệu ban đầu thành tập huấn luyện và tập kiểm tra
-train_data, test_data, train_labels, test_labels = train_test_split(data, label_s, test_size=0.2)
+train_data, test_data, train_labels, test_labels = train_test_split(data[0], data[1], test_size=0.2)
 
 # Chia tập huấn luyện thành tập huấn luyện và tập xác nhận
 train_data, val_data, train_labels, val_labels = train_test_split(train_data, train_labels, test_size=0.2)
 
-# Chuyển dữ liệu sang kiểu Tensor
-train_data = torch.stack(train_data)
-train_labels = torch.stack(train_labels)
-val_data = torch.stack(val_data)
-val_labels = torch.stack(val_labels)
-test_data = torch.stack(test_data)
-test_labels = torch.stack(test_labels)
 
 # Tạo DataLoader cho tập huấn luyện
-train_dataset = TensorDataset(train_data, train_labels)
-train_dataloader = DataLoader(train_dataset, batch_size=4, shuffle=True)
+train_dataset = MyDataset(train_data, train_labels)
+train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
 # Tạo DataLoader cho tập xác nhận
-val_dataset = TensorDataset(val_data, val_labels)
-val_dataloader = DataLoader(val_dataset, batch_size=4, shuffle=False)
+val_dataset = MyDataset(val_data, val_labels)
+val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
 # Tạo DataLoader cho tập kiểm tra
-test_dataset = TensorDataset(test_data, test_labels)
-test_dataloader = DataLoader(test_dataset, batch_size=4, shuffle=False)
+test_dataset = MyDataset(test_data, test_labels)
+test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-
+size_train = len(train_dataset)
+size_val = len(val_dataset)
+size_test = len(test_dataset)
 #####################################################
 
 model = resnet3d.ResNet(resnet3d.BasicBlock, [1, 1, 1, 1], [32, 128, 256, 512])
 model.to(device)
-checkpoint = 'model.pth' 
+checkpoint = 'model2.pth' 
 
 criterion = nn.CrossEntropyLoss().to(device)
 optimizer = optim.Adam(model.parameters(), lr=0.001, betas=(0.9, 0.99))
 
-batch_size = 4
-display_step = 20
+
 
 loss_epoch_array = []
 train_accuracy = []
@@ -97,13 +107,17 @@ valid_accuracy = []
 best_val_loss = 999
 
 print('start training')
-epochs = 10
+epochs = 100
+
+
+
+
 
 for epoch in range(epochs):
 
-    # Quá trình training 
     model.train()
     for batch_idx, (data, target) in enumerate(train_dataloader):
+        data = batch_to_tensor(data)
         data, target = data.to(device), target.to(device)
 
         # Clear gradients for this training step 
@@ -121,21 +135,36 @@ for epoch in range(epochs):
                 epoch, batch_idx * len(data), len(train_dataloader.dataset),
                 100. * batch_idx / len(train_dataloader), loss.item()))
             
-    # Quá trình testing 
     model.eval()
-    test_loss = 0
+    val_loss = 0
     correct = 0
-    # Set no grad cho quá trình testing
     with torch.no_grad():
-        for data, target in test_dataloader:
+        for data, target in val_dataloader:
+            data = batch_to_tensor(data)
             data, target = data.to(device), target.to(device)
             output = model(data)
-            output = F.log_softmax(output, dim=1)
-            test_loss += criterion(output, target.float()) 
+            val_loss += criterion(output, target.float()) 
             pred = output.argmax(dim = 1, keepdim = True)
             correct += pred.eq(target.argmax(dim = 1, keepdim = True).view_as(pred)).sum().item()
-    test_loss /= len(test_dataloader.dataset) 
-    if test_loss < best_val_loss:
-      best_val_loss = test_loss
+    val_loss /= len(val_dataloader.dataset) 
+    if val_loss < best_val_loss:
+      best_val_loss = val_loss
       torch.save(model.state_dict(), checkpoint)  # Lưu model path
-    print("***********    TEST_ACC = {:.2f}%    ***********".format(correct/100))
+    print("***********    VAL_ACC = {:.2f}%    ***********".format(correct/size_val))
+
+
+
+#test
+model.eval()
+test_loss = 0
+correct = 0
+with torch.no_grad():
+    for data, target in test_dataloader:
+        data = batch_to_tensor(data)
+        data, target = data.to(device), target.to(device)
+        output = model(data)
+        test_loss += criterion(output, target.float()) 
+        pred = output.argmax(dim = 1, keepdim = True)
+        correct += pred.eq(target.argmax(dim = 1, keepdim = True).view_as(pred)).sum().item()
+test_loss /= len(test_dataloader.dataset)
+print("***********    VAL_ACC = {:.2f}%    ***********".format(correct/size_test))
